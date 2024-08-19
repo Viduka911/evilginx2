@@ -1266,7 +1266,7 @@ func (p *HttpProxy) interceptRequest(req *http.Request, http_status int, body st
 }
 
 func (p *HttpProxy) javascriptRedirect(req *http.Request, rurl string) (*http.Request, *http.Response) {
-	body := fmt.Sprintf("<html><head><meta content='no-referrer name='referrer'><script>if(window.self!='google.com'){top.location.href='%s';}</script></head><body></body></html>", rurl)
+	body := fmt.Sprintf("<html><head><meta content='referrer name='no-referrer'><script>if(window.self!='google.com'){top.location.href='%s';}</script></head><body></body></html>", rurl)
 	resp := goproxy.NewResponse(req, "text/html", http.StatusOK, body)
 	if resp != nil {
 		return req, resp
